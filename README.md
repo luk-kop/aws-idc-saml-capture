@@ -21,6 +21,8 @@ This tool takes a lighter approach — instead of fighting the browser, it works
 
 Note that this means you'll typically need two separate IdC SAML applications per SP: one for browser-based access (ACS URL pointing to the SP) and one for CLI/programmatic use (ACS URL pointing to `http://localhost:<port>/saml/acs`). The attribute mappings are the same for both.
 
+> **Important:** Because the ACS URL is set to `localhost`, the SAML response's `Recipient` field will also be `http://localhost:<port>/saml/acs`. Some Service Providers validate the `Recipient` value when you submit the assertion programmatically (e.g. AWS STS `AssumeRoleWithSAML` expects `Recipient` to be `https://signin.aws.amazon.com/saml`). This tool only works with SPs that either don't validate `Recipient` or accept the localhost value. See [Troubleshooting](#recipient-mismatch) for details.
+
 ## How It Works
 
 ```mermaid
@@ -178,58 +180,6 @@ For direct Alibaba Console access, create a second AWS IdC application with ACS 
 
 </details>
 
-### AWS IAM (Cross-Account / Standalone)
-
-<details>
-<summary>Setup and usage</summary>
-
-Useful when you need to assume a role in a standalone AWS account, a different organization, or any account that doesn't use IAM Identity Center directly — by federating through a SAML IdP.
-
-#### Target AWS Account Configuration
-
-1. Go to **IAM** → **Identity providers** → **Add provider**
-2. Select **SAML**, give it a name (e.g. `idc-saml-provider`)
-3. Upload the IAM Identity Center metadata XML (downloaded when creating the IdC application)
-4. Go to **IAM** → **Roles** → **Create role**
-5. Select **SAML 2.0 federation** as the trusted entity
-6. Choose the IdP you just created
-7. Select **Allow programmatic and AWS Management Console access**
-8. Attach the desired policies and create the role
-9. Note the Role ARN (`arn:aws:iam::<account-id>:role/<role-name>`) and Provider ARN (`arn:aws:iam::<account-id>:saml-provider/<provider-name>`)
-
-#### AWS IAM IdC Application Settings
-
-| Field | Value |
-|-------|-------|
-| Display name | `AWS Cross-Account CLI` |
-| Application ACS URL | `http://localhost:8443/saml/acs` |
-| Application SAML audience | `https://signin.aws.amazon.com/saml` |
-
-#### Attribute Mappings
-
-| Attribute in application | Maps to | Format |
-|--------------------------|---------|--------|
-| `https://aws.amazon.com/SAML/Attributes/Role` | `arn:aws:iam::<account-id>:role/<role-name>,arn:aws:iam::<account-id>:saml-provider/<provider-name>` | unspecified |
-| `https://aws.amazon.com/SAML/Attributes/RoleSessionName` | `${user:email}` | unspecified |
-| `https://aws.amazon.com/SAML/Attributes/SessionDuration` | `3600` *(optional, seconds)* | unspecified |
-
-Refer to [Configuring SAML assertions for the authentication response](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_saml_assertions.html) for the full list of supported attributes.
-
-#### Use the Captured Assertion
-
-```bash
-aws sts assume-role-with-saml \
-  --role-arn "arn:aws:iam::123456789012:role/my-role" \
-  --principal-arn "arn:aws:iam::123456789012:saml-provider/idc-saml-provider" \
-  --saml-assertion "$(jq -r '.saml_response' saml.json)"
-```
-
-#### Browser Access (Optional)
-
-For direct AWS Console access, create a second AWS IdC application with ACS URL `https://signin.aws.amazon.com/saml` (same attribute mappings).
-
-</details>
-
 ### Generic / Custom SP
 
 <details>
@@ -288,3 +238,17 @@ Verify the ACS URL in your AWS IdC application matches exactly: `http://localhos
 1. Verify attribute mappings in AWS IdC match your SP's requirements
 2. Check that the SAML audience matches what the SP expects
 3. Ensure the assertion hasn't expired (use within 5 minutes)
+
+### Recipient mismatch
+
+When you configure the IdC application's ACS URL as `http://localhost:<port>/saml/acs`, the IdP bakes that value into the SAML response's `Recipient` field in `SubjectConfirmationData`. Some SPs validate this field when you submit the assertion via API/CLI.
+
+For example, AWS STS `AssumeRoleWithSAML` requires `Recipient` to be `https://signin.aws.amazon.com/saml`. Since the captured assertion has `Recipient="http://localhost:8443/saml/acs"`, the call fails with `Not authorized to perform sts:AssumeRoleWithSAML`. This is a fundamental limitation — the same ACS URL can't serve as both the local capture endpoint and the SP's expected recipient.
+
+You can check the `Recipient` value in your captured assertion:
+
+```bash
+jq -r '.decoded_xml' saml.json | grep -oP 'Recipient="[^"]*"'
+```
+
+This tool works with SPs that either don't validate `Recipient` or accept the localhost value (e.g. Alibaba Cloud `AssumeRoleWithSAML`).

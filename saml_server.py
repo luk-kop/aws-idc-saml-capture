@@ -90,12 +90,16 @@ class SAMLHandler(http.server.BaseHTTPRequestHandler):
         Routes:
             ``/`` or ``/health`` — serve the waiting page.
             ``/status`` — return JSON polling endpoint.
+            ``/favicon.ico`` — return empty 204 (browsers request this automatically).
             Everything else — 404.
         """
         if self.path in ("/", "/health"):
             self._send_waiting_page()
         elif self.path == "/status":
             self._send_status()
+        elif self.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
         else:
             self.send_error(404, "Not Found")
 
@@ -164,6 +168,12 @@ class SAMLHandler(http.server.BaseHTTPRequestHandler):
             )
 
             logger.info("SAML Response received!")
+            if assertion:
+                logger.info(
+                    "SAML assertion extracted (base64, %d bytes)", len(assertion)
+                )
+            else:
+                logger.warning("No <Assertion> element found in SAML response")
             if attributes:
                 logger.info("Parsed %d attributes", len(attributes))
 
@@ -378,8 +388,9 @@ class SAMLServer:
 
         original_sigint = signal.getsignal(signal.SIGINT)
 
-        def signal_handler(_sig, _frame):
-            logger.info("Interrupted — shutting down...")
+        def signal_handler(_sig: int, _frame: object) -> None:
+            if not self.shutdown_event.is_set():
+                logger.info("Interrupted — shutting down...")
             self.shutdown_event.set()
 
         signal.signal(signal.SIGINT, signal_handler)
@@ -410,7 +421,11 @@ class SAMLServer:
 
         timed_out = not self.shutdown_event.wait(timeout=effective_timeout)
 
-        self.server.shutdown()
+        # Use a thread to call shutdown() to avoid deadlock if serve_forever()
+        # is still processing a request (e.g. favicon.ico after the SAML POST).
+        shutdown_thread = threading.Thread(target=self.server.shutdown, daemon=True)
+        shutdown_thread.start()
+        shutdown_thread.join(timeout=3)
         self.server.server_close()
 
         if timed_out and SAMLHandler.saml_result is None:
@@ -577,6 +592,11 @@ def main() -> int:
 
         if args.output:
             save_saml_response(response, args.output)
+
+        if not args.output:
+            print("\nBase64 SAML Response:")
+            print("-" * 40)
+            print(response.raw_response)
 
         print("\n[Done] SAML assertion is ready for use.")
         return 0
