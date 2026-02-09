@@ -1,0 +1,6 @@
+[project]
+name = "aws-idc-saml-capture"
+version = "0.1.0"
+description = "Local HTTP server for capturing SAML assertions from AWS IAM Identity Center for use with any SAML Service Provider"
+requires-python = ">=3.12"
+dependencies = []
