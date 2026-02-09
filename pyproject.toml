@@ -4,6 +4,3 @@ version = "0.1.0"
 description = "Local HTTP server for capturing SAML assertions from AWS IAM Identity Center for use with any SAML Service Provider"
 requires-python = ">=3.12"
 dependencies = []
-
-[project.scripts]
-aws-idc-saml-capture = "saml_server:main"
